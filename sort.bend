@@ -6,7 +6,7 @@
 #   Sort.Bufs{perm, counts, offs, table} = bufs
 #   # perm[j]: the input index of the key the sort puts at j
 #   # counts[c], offs[c]: bucket c's size and first slot
-#   Sort.Moved{perm, keys, sorted} = Sort.gather(U32, 8n, perm, keys, [0 : U32^d])
+#   Sort.Moved{perm, keys, sorted} = Sort.gather(~U32, 8n, perm, keys, [0 : U32^d])
 #
 # k is the bucket count K (0 counts as 1), any U32; a key at or past K
 # sorts as K - 1. The sort is stable: keys of one bucket keep their input
@@ -279,39 +279,39 @@ type Moved<-T: Data> is Type:
 type Sd<-T: Data> is Type:
   Sd{src: Array<T>, dst: Array<T>}
 
-def gat.at(-T: Data, +j: U32, dst: Array<T>, r: Array<T> & T) -> Sd<T>:
+def gat.at(~T: Data, +j: U32, dst: Array<T>, r: Array<T> & T) -> Sd<T>:
   (src, v) = r
   Sd{src, Array.set(T, dst, j, v)}
 
 # dst[j] <- src[x].
-def gat.one(-T: Data, +j: U32, +x: U32, p: Sd<T>) -> Sd<T>:
+def gat.one(~T: Data, +j: U32, +x: U32, p: Sd<T>) -> Sd<T>:
   match p:
     case Sd{src, dst}:
-      gat.at(T, j, dst, Array.get(T, src, x))
+      gat.at(~T, j, dst, Array.get(T, src, x))
 
-def gat.fin(-T: Data, pm: Array<U32>, p: Sd<T>) -> Moved<T>:
+def gat.fin(~T: Data, pm: Array<U32>, p: Sd<T>) -> Moved<T>:
   match p:
     case Sd{src, dst}:
       Moved{pm, src, dst}
 
 # r holds perm and its entry x at j: dst[j] <- src[x], then the n entries
 # after j.
-def gat.go(-T: Data, +n: Nat, +j: U32, p: Sd<T>, r: Array<U32> & U32) -> Moved<T>:
+def gat.go(~T: Data, +n: Nat, +j: U32, p: Sd<T>, r: Array<U32> & U32) -> Moved<T>:
   match n:
     case 0n:
       (pm, +x) = r
-      gat.fin(T, pm, gat.one(T, j, x, p))
+      gat.fin(~T, pm, gat.one(~T, j, x, p))
     case 1n+q:
       (pm, +x) = r
       +i = (j + 1 : U32)
-      gat.go(T, q, i, gat.one(T, j, x, p), pm[i])
+      gat.go(~T, q, i, gat.one(~T, j, x, p), pm[i])
 
-def moved.join(-T: Data, l: Moved<T>, r: Moved<T>) -> Moved<T>:
+def moved.join(~T: Data, l: Moved<T>, r: Moved<T>) -> Moved<T>:
   match l r:
     case Moved{lp, ls, ld} Moved{rp, rs, rd}:
       Moved{Array.join(U32, lp, rp), Array.join(T, ls, rs), Array.join(T, ld, rd)}
 
-def moved.rejoin(-T: Data, p2: Array<U32>, s2: Array<T>, d2: Array<T>, r: Moved<T>) -> Moved<T>:
+def moved.rejoin(~T: Data, p2: Array<U32>, s2: Array<T>, d2: Array<T>, r: Moved<T>) -> Moved<T>:
   match r:
     case Moved{p, s, d}:
       Moved{Array.join(U32, p, p2), Array.join(T, s, s2), Array.join(T, d, d2)}
@@ -320,46 +320,46 @@ def moved.rejoin(-T: Data, p2: Array<U32>, s2: Array<T>, d2: Array<T>, r: Moved<
 # with two handles each to perm, src and dst. Block i reads only its
 # entries of perm, reads src anywhere (no lane writes src) and writes only
 # its slots of dst.
-def gats(-T: Data, +d: Nat, +i: U32, +e: Nat, fp: Array<U32> & Array<U32>, fs: Array<T> & Array<T>, fd: Array<T> & Array<T>) -> Moved<T>:
+def gats(~T: Data, +d: Nat, +i: U32, +e: Nat, fp: Array<U32> & Array<U32>, fs: Array<T> & Array<T>, fd: Array<T> & Array<T>) -> Moved<T>:
   match d:
     case 0n:
       (pm, pm2) = fp
       (src, src2) = fs
       (dst, dst2) = fd
       +at = U32.shln(i, e)
-      moved.rejoin(T, pm2, src2, dst2, gat.go(T, U32.to_nat((U32.shln(1, e) - 1 : U32)), at,
+      moved.rejoin(~T, pm2, src2, dst2, gat.go(~T, U32.to_nat((U32.shln(1, e) - 1 : U32)), at,
         Sd{src, dst}, pm[at]))
     case 1n+p:
       (p0, p1) = fp
       (s0, s1) = fs
       (d0, d1) = fd
       +j = (i * 2 : U32)
-      l r = gats(T, p, j, e, Array.fork(U32, p0), Array.fork(T, s0), Array.fork(T, d0))
-        gats(T, p, (j + 1 : U32), e, Array.fork(U32, p1), Array.fork(T, s1), Array.fork(T, d1))
-      moved.join(T, l, r)
+      l r = gats(~T, p, j, e, Array.fork(U32, p0), Array.fork(T, s0), Array.fork(T, d0))
+        gats(~T, p, (j + 1 : U32), e, Array.fork(U32, p1), Array.fork(T, s1), Array.fork(T, d1))
+      moved.join(~T, l, r)
 
-def gather.pick(-T: Data, ok: Bool, +lg: Nat, +v: T, src: Array<T>, dst: Array<T>) -> Sd<T>:
+def gather.pick(~T: Data, ok: Bool, +lg: Nat, +v: T, src: Array<T>, dst: Array<T>) -> Sd<T>:
   match ok:
     case True{}:
       Sd{src, dst}
     case False{}:
       Sd{src, Array.new(T, lg, v)}
 
-def gather.dst(-T: Data, ok: Bool, +lg: Nat, dst: Array<T>, r: Array<T> & T) -> Sd<T>:
+def gather.dst(~T: Data, ok: Bool, +lg: Nat, dst: Array<T>, r: Array<T> & T) -> Sd<T>:
   (src, v) = r
-  gather.pick(T, ok, lg, v, src, dst)
+  gather.pick(~T, ok, lg, v, src, dst)
 
-def gather.run(-T: Data, +b: Nat, +lg: Nat, pm: Array<U32>, p: Sd<T>) -> Moved<T>:
+def gather.run(~T: Data, +b: Nat, +lg: Nat, pm: Array<U32>, p: Sd<T>) -> Moved<T>:
   match p:
     case Sd{src, dst}:
       +d = Nat.min(b, lg)
-      gats(T, d, 0, Nat.sub(lg, d), Array.fork(U32, pm), Array.fork(T, src), Array.fork(T, dst))
+      gats(~T, d, 0, Nat.sub(lg, d), Array.fork(U32, pm), Array.fork(T, src), Array.fork(T, dst))
 
-def gather.at(-T: Data, +b: Nat, src: Array<T>, r: Array<U32> & U32, s: Array<T> & U32) -> Moved<T>:
+def gather.at(~T: Data, +b: Nat, src: Array<T>, r: Array<U32> & U32, s: Array<T> & U32) -> Moved<T>:
   (pm, +n) = r
   (dst, +m) = s
   +lg = U32.log2(n)
-  gather.run(T, b, lg, pm, gather.dst(T, U32.is_eq(m, n), lg, dst, Array.get(T, src, 0)))
+  gather.run(~T, b, lg, pm, gather.dst(~T, U32.is_eq(m, n), lg, dst, Array.get(T, src, 0)))
 
 # API
 # ---
@@ -374,5 +374,5 @@ def by_key(+b: Nat, +k: U32, keys: Array<U32>, bufs: Bufs) -> Array<U32> & Bufs:
 # perm, src in sorted order. src may be any size (indices wrap); dst is
 # reused when it has perm's size, else replaced by a new array. Returns
 # the three arrays.
-def gather(-T: Data, +b: Nat, perm: Array<U32>, src: Array<T>, dst: Array<T>) -> Moved<T>:
-  gather.at(T, b, src, Array.size(U32, perm), Array.size(T, dst))
+def gather(~T: Data, +b: Nat, perm: Array<U32>, src: Array<T>, dst: Array<T>) -> Moved<T>:
+  gather.at(~T, b, src, Array.size(U32, perm), Array.size(T, dst))
