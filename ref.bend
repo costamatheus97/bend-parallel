@@ -226,3 +226,38 @@ def perm(+k: U32, xs: List<&2, U32>) -> List<&2, U32>:
 # The keys in sorted order.
 def sorted(+k: U32, xs: List<&2, U32>) -> List<&2, U32>:
   keys_of(sort_items(k, index(xs, 0)))
+
+# Vocabulary for the laws
+# -----------------------
+
+# b's 1, added to n.
+def bump1(b: Bool, n: Nat) -> Nat:
+  match b:
+    case True{}:
+      1n+n
+    case False{}:
+      n
+
+# How many items of xs ~eq calls equal to y (hub: bend-lawful-stdlib).
+def count(~eq: Item -> Item -> Bool, +y: Item, xs: List<&2, Item>) -> Nat:
+  match xs:
+    case Nil{}:
+      0n
+    case h <> t:
+      bump1(eq(y, h), count(~eq, y, t))
+
+# Every item's bucket is at least lo, and the buckets ascend.
+def from(+k: U32, +lo: Nat, xs: List<&2, Item>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case +h <> t:
+      ({Nat.is_le(lo, rank(k, h)) == True{} : Bool} & from(k, rank(k, h), t))
+
+# The items' buckets ascend.
+def Sorted(+k: U32, xs: List<&2, Item>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case +h <> t:
+      from(k, rank(k, h), t)
