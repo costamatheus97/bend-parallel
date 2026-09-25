@@ -572,3 +572,135 @@ def from_sorted(xs: List<&2, Ref.Item>, +k: U32, +lo: Nat, r: Ref.from(k, lo, xs
 def Laws.sort_sorted(k, xs):
   from_sorted(Ref.sort_items(k, xs), k, 0n,
     peel_from(Nat.sub(Ref.buckets(k), 1n), xs, k, 0n, 0n, rng_all(k, xs), {==}))
+
+# Sort: stability
+# ---------------
+# Bucket c of a peel is bucket c of its input: the bucket peeled first
+# holds bucket c only when it is c, and the rest holds the rest of c.
+
+def keep_append(+h: Ref.Item, x: List<&2, Ref.Item>, y: List<&2, Ref.Item>, s: Bool)
+  -> {Ref.keep(h, List.append(&2, Ref.Item, x, y), s) == List.append(&2, Ref.Item, Ref.keep(h, x, s), y) : List<&2, Ref.Item>}:
+  match s:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def eqs_append(xs: List<&2, Ref.Item>, +ys: List<&2, Ref.Item>, +k: U32, +c: Nat)
+  -> {Ref.eqs(List.append(&2, Ref.Item, xs, ys), k, c) == List.append(&2, Ref.Item, Ref.eqs(xs, k, c), Ref.eqs(ys, k, c)) : List<&2, Ref.Item>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case +h <> +t:
+      +s = Nat.is_eq(Ref.rank(k, h), c)
+      +l = Ref.keep(h, Ref.eqs(List.append(&2, Ref.Item, t, ys), k, c), s)
+      %keep_append(h, Ref.eqs(t, k, c), Ref.eqs(ys, k, c), s) : {l == _ : List<&2, Ref.Item>}
+      %eqs_append(t, ys, k, c) : {l == Ref.keep(h, _, s) : List<&2, Ref.Item>}
+      {==}
+
+def eq_of_is_eq(a: Nat, b: Nat, e: {True{} == Nat.is_eq(a, b) : Bool}) -> {a == b : Nat}:
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      %e : BD(_, Unit, {0n == 1n+q : Nat})
+      Unit{}
+    case 1n+p 0n:
+      %e : BD(_, Unit, {1n+p == 0n : Nat})
+      Unit{}
+    case 1n+p 1n+q:
+      %eq_of_is_eq(p, q, e) : {1n+p == 1n+_ : Nat}
+      {==}
+
+# r is c and not c0: c is not c0.
+def ne_of(r: Nat, c: Nat, -c0: Nat, e: {True{} == Nat.is_eq(r, c) : Bool}, e0: {False{} == Nat.is_eq(r, c0) : Bool})
+  -> {False{} == Nat.is_eq(c, c0) : Bool}:
+  %eq_of_is_eq(r, c, e) : {False{} == Nat.is_eq(_, c0) : Bool}
+  e0
+
+def is_eq_comm(a: Nat, b: Nat) -> {Nat.is_eq(a, b) == Nat.is_eq(b, a) : Bool}:
+  match a b:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      is_eq_comm(p, q)
+
+def none_one(s: Bool, +h: Ref.Item, +k: U32, +c0: Nat, +c: Nat, -a: List<&2, Ref.Item>, +ne: {False{} == Nat.is_eq(c, c0) : Bool},
+  e: {s == Nat.is_eq(Ref.rank(k, h), c0) : Bool}, r: {Nil{} == Ref.eqs(a, k, c) : List<&2, Ref.Item>})
+  -> {Nil{} == Ref.eqs(Ref.keep(h, a, s), k, c) : List<&2, Ref.Item>}:
+  match s:
+    case True{}:
+      %Equal.sym(Nat, Ref.rank(k, h), c0, eq_of_is_eq(Ref.rank(k, h), c0, e)) : {Nil{} == Ref.keep(h, Ref.eqs(a, k, c), Nat.is_eq(_, c)) : List<&2, Ref.Item>}
+      %is_eq_comm(c, c0) : {Nil{} == Ref.keep(h, Ref.eqs(a, k, c), _) : List<&2, Ref.Item>}
+      %ne : {Nil{} == Ref.keep(h, Ref.eqs(a, k, c), _) : List<&2, Ref.Item>}
+      r
+    case False{}:
+      r
+
+# Bucket c of bucket c0 is empty when c is not c0.
+def eqs_eqs_ne(xs: List<&2, Ref.Item>, +k: U32, +c0: Nat, +c: Nat, +ne: {False{} == Nat.is_eq(c, c0) : Bool})
+  -> {Nil{} == Ref.eqs(Ref.eqs(xs, k, c0), k, c) : List<&2, Ref.Item>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case +h <> +t:
+      none_one(Nat.is_eq(Ref.rank(k, h), c0), h, k, c0, c, Ref.eqs(t, k, c0), ne, {==}, eqs_eqs_ne(t, k, c0, c, ne))
+
+def merge_s(s: Bool, +h: Ref.Item, +t: List<&2, Ref.Item>, +k: U32, +c0: Nat, +c: Nat,
+  e0: {False{} == Nat.is_eq(Ref.rank(k, h), c0) : Bool}, e: {s == Nat.is_eq(Ref.rank(k, h), c) : Bool},
+  ih: {List.append(&2, Ref.Item, Ref.eqs(Ref.eqs(t, k, c0), k, c), Ref.eqs(Ref.nes(t, k, c0), k, c)) == Ref.eqs(t, k, c) : List<&2, Ref.Item>})
+  -> {List.append(&2, Ref.Item, Ref.eqs(Ref.eqs(t, k, c0), k, c), Ref.keep(h, Ref.eqs(Ref.nes(t, k, c0), k, c), s))
+    == Ref.keep(h, Ref.eqs(t, k, c), s) : List<&2, Ref.Item>}:
+  match s:
+    case False{}:
+      ih
+    case True{}:
+      +x = Ref.eqs(Ref.eqs(t, k, c0), k, c)
+      +y = Ref.eqs(Ref.nes(t, k, c0), k, c)
+      %ih : {List.append(&2, Ref.Item, x, h <> y) == h <> _ : List<&2, Ref.Item>}
+      %eqs_eqs_ne(t, k, c0, c, ne_of(Ref.rank(k, h), c, c0, e, e0)) : {List.append(&2, Ref.Item, _, h <> y) == h <> List.append(&2, Ref.Item, _, y) : List<&2, Ref.Item>}
+      {==}
+
+def merge_s0(s0: Bool, +h: Ref.Item, +t: List<&2, Ref.Item>, +k: U32, +c0: Nat, +c: Nat,
+  e0: {s0 == Nat.is_eq(Ref.rank(k, h), c0) : Bool},
+  ih: {List.append(&2, Ref.Item, Ref.eqs(Ref.eqs(t, k, c0), k, c), Ref.eqs(Ref.nes(t, k, c0), k, c)) == Ref.eqs(t, k, c) : List<&2, Ref.Item>})
+  -> {List.append(&2, Ref.Item, Ref.eqs(Ref.keep(h, Ref.eqs(t, k, c0), s0), k, c), Ref.eqs(Ref.keep(h, Ref.nes(t, k, c0), Bool.not(s0)), k, c))
+    == Ref.keep(h, Ref.eqs(t, k, c), Nat.is_eq(Ref.rank(k, h), c)) : List<&2, Ref.Item>}:
+  match s0:
+    case True{}:
+      +s = Nat.is_eq(Ref.rank(k, h), c)
+      +x = Ref.eqs(Ref.eqs(t, k, c0), k, c)
+      +y = Ref.eqs(Ref.nes(t, k, c0), k, c)
+      %keep_append(h, x, y, s) : {_ == Ref.keep(h, Ref.eqs(t, k, c), s) : List<&2, Ref.Item>}
+      %ih : {Ref.keep(h, List.append(&2, Ref.Item, x, y), s) == Ref.keep(h, _, s) : List<&2, Ref.Item>}
+      {==}
+    case False{}:
+      merge_s(Nat.is_eq(Ref.rank(k, h), c), h, t, k, c0, c, e0, {==}, ih)
+
+# Bucket c of bucket c0, then bucket c of the rest, is bucket c.
+def merge(xs: List<&2, Ref.Item>, +k: U32, +c0: Nat, +c: Nat)
+  -> {List.append(&2, Ref.Item, Ref.eqs(Ref.eqs(xs, k, c0), k, c), Ref.eqs(Ref.nes(xs, k, c0), k, c)) == Ref.eqs(xs, k, c) : List<&2, Ref.Item>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case +h <> +t:
+      merge_s0(Nat.is_eq(Ref.rank(k, h), c0), h, t, k, c0, c, {==}, merge(t, k, c0, c))
+
+def peel_stable(+f: Nat, +xs: List<&2, Ref.Item>, +k: U32, +c0: Nat, +c: Nat)
+  -> {Ref.eqs(Ref.peel(f, xs, k, c0), k, c) == Ref.eqs(xs, k, c) : List<&2, Ref.Item>}:
+  match f:
+    case 0n:
+      {==}
+    case 1n+g:
+      +e = Ref.eqs(xs, k, c0)
+      +n = Ref.nes(xs, k, c0)
+      %merge(xs, k, c0, c) : {Ref.eqs(List.append(&2, Ref.Item, e, Ref.peel(g, n, k, 1n+c0)), k, c) == _ : List<&2, Ref.Item>}
+      %peel_stable(g, n, k, 1n+c0, c) : {Ref.eqs(List.append(&2, Ref.Item, e, Ref.peel(g, n, k, 1n+c0)), k, c) == List.append(&2, Ref.Item, Ref.eqs(e, k, c), _) : List<&2, Ref.Item>}
+      eqs_append(e, Ref.peel(g, n, k, 1n+c0), k, c)
+
+def Laws.sort_stable(k, xs, c):
+  peel_stable(Nat.sub(Ref.buckets(k), 1n), xs, k, 0n, c)

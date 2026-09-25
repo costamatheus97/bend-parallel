@@ -86,3 +86,11 @@ law sort_sorted:
   for +k: U32
   for +xs: List<&2, Ref.Item>
   Ref.Sorted(k, Ref.sort_items(k, xs))
+
+# LAW: the sort is stable: the items of any bucket c come out in the order
+# they went in (bucket c of the output is bucket c of the input)
+law sort_stable:
+  for +k: U32
+  for +xs: List<&2, Ref.Item>
+  for +c: Nat
+  {Ref.eqs(Ref.sort_items(k, xs), k, c) == Ref.eqs(xs, k, c) : List<&2, Ref.Item>}
