@@ -1,8 +1,11 @@
 # scan.bend: parallel prefix sums over an Array<U32>, in place.
 #
 #   import ./scan.bend as Scan
-#   (a, total) = Scan.exclusive(8n, a)   # a[j] becomes a[0] + .. + a[j - 1]
-#   (a, total) = Scan.inclusive(8n, a)   # a[j] becomes a[0] + .. + a[j]
+#   Scan.exclusive(8n, a)   # (a, total): a[j] becomes a[0] + .. + a[j - 1]
+#   Scan.inclusive(8n, a)   # (a, total): a[j] becomes a[0] + .. + a[j]
+#
+# A call's result is taken apart by a def's parameter (a def of yours
+# taking r: Array<U32> & U32), not by a let or match on the call itself.
 #
 # Sums wrap at 2^32, as U32.add does. The first argument is the fork
 # depth b: the array is cut into 2^b blocks of equal size (b is lowered to

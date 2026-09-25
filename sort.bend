@@ -2,11 +2,13 @@
 # and a parallel gather to reorder payloads by its permutation.
 #
 #   import ./sort.bend as Sort
-#   (keys, bufs) = Sort.by_key(8n, 256, keys, Sort.Bufs.new())
+#   Sort.by_key(8n, 256, keys, Sort.Bufs.new())   # (keys, bufs)
 #   Sort.Bufs{perm, counts, offs, table} = bufs
 #   # perm[j]: the input index of the key the sort puts at j
 #   # counts[c], offs[c]: bucket c's size and first slot
-#   Sort.Moved{perm, keys, sorted} = Sort.gather(~U32, 8n, perm, keys, [0 : U32^d])
+#   Sort.gather(~U32, 8n, perm, keys, [0 : U32^d])   # Moved{perm, keys, sorted}
+#
+# (As in scan.bend: take a call's result apart in a def's parameter.)
 #
 # k is the bucket count K (0 counts as 1), any U32; a key at or past K
 # sorts as K - 1. The sort is stable: keys of one bucket keep their input

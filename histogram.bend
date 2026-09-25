@@ -2,8 +2,8 @@
 # atomics.
 #
 #   import ./histogram.bend as Hist
-#   (keys, bufs) = Hist.count(8n, 256, keys, Hist.Bufs.new())
-#   Hist.Bufs{counts, table} = bufs      # counts[c]: the keys in bucket c
+#   Hist.count(8n, 256, keys, Hist.Bufs.new())   # (keys, bufs)
+#   Hist.Bufs{counts, table} = bufs              # counts[c]: the keys in bucket c
 #
 # k is the bucket count K (0 counts as 1), any U32. A key at or past K
 # counts as K - 1. counts holds 2^ceil(log2 K) entries: the K counts, then
