@@ -5,7 +5,8 @@ Parallel prefix sums, histograms and a stable counting sort over flat
 called under `!`, on the GPU.
 
 This is a community package. It is not part of Bend and is not maintained
-by the Bend authors. BendHub name: `bend-parallel` (not yet published).
+by the Bend authors. On BendHub as `bend-parallel` (0.1.0.0,
+`0xeef3a8486d410ea6f25709aac90dbf40`).
 
 - `scan.bend`: exclusive and inclusive prefix sums, in place, with the total.
 - `histogram.bend`: counts of U32 keys in K buckets.
@@ -22,7 +23,7 @@ thread count and lane.
 
 ## Import
 
-Once published:
+From BendHub (Bend 2.0.27 or later):
 
 ```
 import bend-parallel@0.1.0.0/scan.bend as Scan
@@ -30,7 +31,7 @@ import bend-parallel@0.1.0.0/histogram.bend as Hist
 import bend-parallel@0.1.0.0/sort.bend as Sort
 ```
 
-For now, from a checkout: `import ./bend-parallel/sort.bend as Sort`.
+From a checkout (any version it runs on): `import ./bend-parallel/sort.bend as Sort`.
 Versioned `name@version/...` imports need Bend 2.0.27 or later.
 
 ## API
@@ -125,9 +126,9 @@ with `Bufs.sized` outside the `!` and hand the same `Bufs` back each call
 
 ## Example
 
-With `./bend-parallel/...` imports in place of the versioned ones (until
-the package is published), this program checks on both compilers. Built
-with 2.0.27, it prints 9 (the total), 2 (the keys in bucket 3) and 1 (the
+This program fetches the package from BendHub (2.0.27 or later; with
+`./bend-parallel/...` imports it also checks on 2.0.24). Built with 2.0.27
+or run with 2.0.28, it prints 9 (the total), 2 (the keys in bucket 3) and 1 (the
 smallest key).
 
 ```
