@@ -239,3 +239,336 @@ def Laws.histogram_total(k, xs):
   %U32.add_comm(0, f) : {l == _ : U32}
   %zeros_sum(Ref.buckets(k), 0) : {l == U32.add(_, f) : U32}
   hist_sum(xs, k, z, 0)
+
+# Nat
+# ---
+
+def nat_add_zero(a: Nat) -> {a == Nat.add(a, 0n) : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      %nat_add_zero(p) : {1n+p == 1n+_ : Nat}
+      {==}
+
+def nat_add_succ(a: Nat, -b: Nat) -> {1n+Nat.add(a, b) == Nat.add(a, 1n+b) : Nat}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      %nat_add_succ(p, b) : {2n+Nat.add(p, b) == 1n+_ : Nat}
+      {==}
+
+# Sort: counts
+# ------------
+
+def bump1_add_l(e: Bool, +a: Nat, +b: Nat) -> {Ref.bump1(e, Nat.add(a, b)) == Nat.add(Ref.bump1(e, a), b) : Nat}:
+  match e:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def bump1_add_r(e: Bool, +a: Nat, +b: Nat) -> {Ref.bump1(e, Nat.add(a, b)) == Nat.add(a, Ref.bump1(e, b)) : Nat}:
+  match e:
+    case True{}:
+      nat_add_succ(a, b)
+    case False{}:
+      {==}
+
+def count_append(~eq: Ref.Item -> Ref.Item -> Bool, +y: Ref.Item, xs: List<&2, Ref.Item>, +ys: List<&2, Ref.Item>)
+  -> {Ref.count(~eq, y, List.append(&2, Ref.Item, xs, ys)) == Nat.add(Ref.count(~eq, y, xs), Ref.count(~eq, y, ys)) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case +h <> +t:
+      +e = eq(y, h)
+      %bump1_add_l(e, Ref.count(~eq, y, t), Ref.count(~eq, y, ys)) : {Ref.bump1(e, Ref.count(~eq, y, List.append(&2, Ref.Item, t, ys))) == _ : Nat}
+      %count_append(~eq, y, t, ys) : {Ref.bump1(e, Ref.count(~eq, y, List.append(&2, Ref.Item, t, ys))) == Ref.bump1(e, _) : Nat}
+      {==}
+
+# One item, kept on one side of the split and dropped on the other.
+def split_one(~eq: Ref.Item -> Ref.Item -> Bool, +y: Ref.Item, +h: Ref.Item, +a: List<&2, Ref.Item>, +b: List<&2, Ref.Item>, s: Bool)
+  -> {Nat.add(Ref.count(~eq, y, Ref.keep(h, a, s)), Ref.count(~eq, y, Ref.keep(h, b, Bool.not(s))))
+    == Ref.bump1(eq(y, h), Nat.add(Ref.count(~eq, y, a), Ref.count(~eq, y, b))) : Nat}:
+  match s:
+    case True{}:
+      +e = eq(y, h)
+      %bump1_add_l(e, Ref.count(~eq, y, a), Ref.count(~eq, y, b)) : {_ == Ref.bump1(e, Nat.add(Ref.count(~eq, y, a), Ref.count(~eq, y, b))) : Nat}
+      {==}
+    case False{}:
+      +e = eq(y, h)
+      %bump1_add_r(e, Ref.count(~eq, y, a), Ref.count(~eq, y, b)) : {_ == Ref.bump1(e, Nat.add(Ref.count(~eq, y, a), Ref.count(~eq, y, b))) : Nat}
+      {==}
+
+# Splitting into bucket c and the rest keeps every count.
+def partition(~eq: Ref.Item -> Ref.Item -> Bool, +y: Ref.Item, xs: List<&2, Ref.Item>, +k: U32, +c: Nat)
+  -> {Nat.add(Ref.count(~eq, y, Ref.eqs(xs, k, c)), Ref.count(~eq, y, Ref.nes(xs, k, c))) == Ref.count(~eq, y, xs) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case +h <> +t:
+      +s = Nat.is_eq(Ref.rank(k, h), c)
+      +l = Nat.add(Ref.count(~eq, y, Ref.keep(h, Ref.eqs(t, k, c), s)), Ref.count(~eq, y, Ref.keep(h, Ref.nes(t, k, c), Bool.not(s))))
+      %partition(~eq, y, t, k, c) : {l == Ref.bump1(eq(y, h), _) : Nat}
+      split_one(~eq, y, h, Ref.eqs(t, k, c), Ref.nes(t, k, c), s)
+
+def peel_count(~eq: Ref.Item -> Ref.Item -> Bool, +y: Ref.Item, +f: Nat, +xs: List<&2, Ref.Item>, +k: U32, +c: Nat)
+  -> {Ref.count(~eq, y, Ref.peel(f, xs, k, c)) == Ref.count(~eq, y, xs) : Nat}:
+  match f:
+    case 0n:
+      {==}
+    case 1n+g:
+      +e = Ref.eqs(xs, k, c)
+      +n = Ref.nes(xs, k, c)
+      +l = Ref.count(~eq, y, List.append(&2, Ref.Item, e, Ref.peel(g, n, k, 1n+c)))
+      %partition(~eq, y, xs, k, c) : {l == _ : Nat}
+      %peel_count(~eq, y, g, n, k, 1n+c) : {l == Nat.add(Ref.count(~eq, y, e), _) : Nat}
+      count_append(~eq, y, e, Ref.peel(g, n, k, 1n+c))
+
+def Laws.sort_count(eq, y, k, xs):
+  peel_count(~eq, y, Nat.sub(Ref.buckets(k), 1n), xs, k, 0n)
+
+# Sort: order
+# -----------
+# The bucket bound (a clamped key's bucket is at most K - 1) makes what
+# peel leaves after the last bucket one bucket, so the whole output
+# ascends. Rng(k, lo, hi, xs): every item's bucket is in lo .. hi.
+
+# A type picked by a Bool: a rewrite through it refutes True{} == False{}.
+def BD(b: Bool, t: Type, f: Type) -> Type:
+  match b:
+    case True{}:
+      t
+    case False{}:
+      f
+
+def le_zero(n: Nat) -> {True{} == Nat.is_le(0n, n) : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+def le_refl(n: Nat) -> {True{} == Nat.is_le(n, n) : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      le_refl(p)
+
+def le_succ(n: Nat) -> {True{} == Nat.is_le(n, 1n+n) : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      le_succ(p)
+
+def le_trans(a: Nat, b: Nat, c: Nat, ab: {True{} == Nat.is_le(a, b) : Bool}, bc: {True{} == Nat.is_le(b, c) : Bool})
+  -> {True{} == Nat.is_le(a, c) : Bool}:
+  match a b c:
+    case 0n _ _:
+      le_zero(c)
+    case 1n+p 0n _:
+      %ab : BD(_, Unit, {True{} == Nat.is_le(1n+p, c) : Bool})
+      Unit{}
+    case 1n+p 1n+q 0n:
+      %bc : BD(_, Unit, {True{} == Nat.is_le(1n+p, 0n) : Bool})
+      Unit{}
+    case 1n+p 1n+q 1n+r:
+      le_trans(p, q, r, ab, bc)
+
+def eq_le_l(r: Nat, c: Nat, e: {True{} == Nat.is_eq(r, c) : Bool}) -> {True{} == Nat.is_le(c, r) : Bool}:
+  match r c:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      %e : BD(_, Unit, {True{} == Nat.is_le(1n+q, 0n) : Bool})
+      Unit{}
+    case 1n+p 0n:
+      {==}
+    case 1n+p 1n+q:
+      eq_le_l(p, q, e)
+
+def eq_le_r(r: Nat, c: Nat, e: {True{} == Nat.is_eq(r, c) : Bool}) -> {True{} == Nat.is_le(r, c) : Bool}:
+  match r c:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      {==}
+    case 1n+p 0n:
+      %e : BD(_, Unit, {True{} == Nat.is_le(1n+p, 0n) : Bool})
+      Unit{}
+    case 1n+p 1n+q:
+      eq_le_r(p, q, e)
+
+# c <= r and r != c: c + 1 <= r.
+def le_ne_succ(c: Nat, r: Nat, le: {True{} == Nat.is_le(c, r) : Bool}, ne: {False{} == Nat.is_eq(r, c) : Bool})
+  -> {True{} == Nat.is_le(1n+c, r) : Bool}:
+  match c r:
+    case 0n 0n:
+      %ne : BD(_, {True{} == Nat.is_le(1n, 0n) : Bool}, Unit)
+      Unit{}
+    case 0n 1n+q:
+      le_zero(q)
+    case 1n+p 0n:
+      %le : BD(_, Unit, {True{} == Nat.is_le(2n+p, 0n) : Bool})
+      Unit{}
+    case 1n+p 1n+q:
+      le_ne_succ(p, q, le, ne)
+
+def sub_zero(n: Nat) -> {n == Nat.sub(n, 0n) : Nat}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      {==}
+
+# n < m: n + 1 <= m.
+def lt_le_succ(n: Nat, m: Nat, lt: {True{} == Nat.is_lt(n, m) : Bool}) -> {True{} == Nat.is_le(1n+n, m) : Bool}:
+  match n m:
+    case 0n 0n:
+      %lt : BD(_, Unit, {True{} == Nat.is_le(1n, 0n) : Bool})
+      Unit{}
+    case 0n 1n+q:
+      le_zero(q)
+    case 1n+p 0n:
+      %lt : BD(_, Unit, {True{} == Nat.is_le(2n+p, 0n) : Bool})
+      Unit{}
+    case 1n+p 1n+q:
+      lt_le_succ(p, q, lt)
+
+# n < m: n <= m - 1.
+def lt_le_pred(n: Nat, +m: Nat, lt: {True{} == Nat.is_lt(n, m) : Bool}) -> {True{} == Nat.is_le(n, Nat.sub(m, 1n)) : Bool}:
+  match n m:
+    case 0n 0n:
+      {==}
+    case 0n 1n+q:
+      le_zero(Nat.sub(q, 0n))
+    case 1n+p 0n:
+      %lt : BD(_, Unit, {True{} == Nat.is_le(1n+p, 0n) : Bool})
+      Unit{}
+    case 1n+p 1n+q:
+      %sub_zero(q) : {True{} == Nat.is_le(1n+p, _) : Bool}
+      lt_le_succ(p, q, lt)
+
+def pick_le(b: Bool, +n: Nat, +m: Nat, e: {b == Nat.is_lt(n, m) : Bool})
+  -> {True{} == Nat.is_le(Ref.pick(b, n, Nat.sub(m, 1n)), Nat.sub(m, 1n)) : Bool}:
+  match b:
+    case True{}:
+      lt_le_pred(n, m, e)
+    case False{}:
+      le_refl(Nat.sub(m, 1n))
+
+# The bucket bound: every item's bucket is at most K - 1.
+def rank_le(+k: U32, it: Ref.Item) -> {True{} == Nat.is_le(Ref.rank(k, it), Nat.sub(Ref.buckets(k), 1n)) : Bool}:
+  match it:
+    case Ref.Item{+key, idx}:
+      +n = U32.to_nat(key)
+      +m = Ref.buckets(k)
+      pick_le(Nat.is_lt(n, m), n, m, {==})
+
+def Rng(+k: U32, +lo: Nat, +hi: Nat, xs: List<&2, Ref.Item>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case +h <> t:
+      {True{} == Nat.is_le(lo, Ref.rank(k, h)) : Bool} & {True{} == Nat.is_le(Ref.rank(k, h), hi) : Bool} & Rng(k, lo, hi, t)
+
+def rng_cast(+k: U32, +lo: Nat, -a: Nat, -b: Nat, -xs: List<&2, Ref.Item>, e: {a == b : Nat}, r: Rng(k, lo, b, xs)) -> Rng(k, lo, a, xs):
+  %Equal.sym(Nat, a, b, e) : Rng(k, lo, _, xs)
+  r
+
+def rng_all(+k: U32, xs: List<&2, Ref.Item>) -> Rng(k, 0n, Nat.sub(Ref.buckets(k), 1n), xs):
+  match xs:
+    case Nil{}:
+      Unit{}
+    case +h <> t:
+      (le_zero(Ref.rank(k, h)), rank_le(k, h), rng_all(k, t))
+
+def eqs_one(b: Bool, +h: Ref.Item, +k: U32, +c: Nat, -a: List<&2, Ref.Item>, e: {b == Nat.is_eq(Ref.rank(k, h), c) : Bool},
+  e2: {b == Nat.is_eq(Ref.rank(k, h), c) : Bool}, r: Rng(k, c, c, a)) -> Rng(k, c, c, Ref.keep(h, a, b)):
+  match b:
+    case True{}:
+      (eq_le_l(Ref.rank(k, h), c, e), eq_le_r(Ref.rank(k, h), c, e2), r)
+    case False{}:
+      r
+
+# Bucket c's items are all in bucket c.
+def eqs_rng(xs: List<&2, Ref.Item>, +k: U32, +c: Nat) -> Rng(k, c, c, Ref.eqs(xs, k, c)):
+  match xs:
+    case Nil{}:
+      Unit{}
+    case +h <> +t:
+      eqs_one(Nat.is_eq(Ref.rank(k, h), c), h, k, c, Ref.eqs(t, k, c), {==}, {==}, eqs_rng(t, k, c))
+
+def nes_one(b: Bool, +h: Ref.Item, +k: U32, +c: Nat, +hi: Nat, -a: List<&2, Ref.Item>, e: {b == Nat.is_eq(Ref.rank(k, h), c) : Bool},
+  l: {True{} == Nat.is_le(c, Ref.rank(k, h)) : Bool}, u: {True{} == Nat.is_le(Ref.rank(k, h), hi) : Bool}, r: Rng(k, 1n+c, hi, a))
+  -> Rng(k, 1n+c, hi, Ref.keep(h, a, Bool.not(b))):
+  match b:
+    case True{}:
+      r
+    case False{}:
+      (le_ne_succ(c, Ref.rank(k, h), l, e), u, r)
+
+# The items past bucket c are past it.
+def nes_rng(xs: List<&2, Ref.Item>, +k: U32, +c: Nat, +hi: Nat, r: Rng(k, c, hi, xs)) -> Rng(k, 1n+c, hi, Ref.nes(xs, k, c)):
+  match xs:
+    case Nil{}:
+      Unit{}
+    case +h <> +t:
+      (l, u, rt) = r
+      nes_one(Nat.is_eq(Ref.rank(k, h), c), h, k, c, hi, Ref.nes(t, k, c), {==}, l, u, nes_rng(t, k, c, hi, rt))
+
+def from_weaken(xs: List<&2, Ref.Item>, +k: U32, +lo: Nat, +c: Nat, l: {True{} == Nat.is_le(lo, c) : Bool}, r: Ref.from(k, c, xs))
+  -> Ref.from(k, lo, xs):
+  match xs:
+    case Nil{}:
+      Unit{}
+    case +h <> t:
+      (a, b) = r
+      (le_trans(lo, c, Ref.rank(k, h), l, a), b)
+
+# One bucket's items, all of them c, then items that ascend from c.
+def from_append(xs: List<&2, Ref.Item>, +ys: List<&2, Ref.Item>, +k: U32, +lo: Nat, +c: Nat, r: Rng(k, c, c, xs),
+  l: {True{} == Nat.is_le(lo, c) : Bool}, f: Ref.from(k, c, ys)) -> Ref.from(k, lo, List.append(&2, Ref.Item, xs, ys)):
+  match xs:
+    case Nil{}:
+      from_weaken(ys, k, lo, c, l, f)
+    case +h <> +t:
+      (a, u, rt) = r
+      (le_trans(lo, c, Ref.rank(k, h), l, a), from_append(t, ys, k, Ref.rank(k, h), c, rt, u, f))
+
+# Items all in bucket c ascend.
+def rng_from(xs: List<&2, Ref.Item>, +k: U32, +c: Nat, +lo: Nat, r: Rng(k, c, c, xs), l: {True{} == Nat.is_le(lo, c) : Bool})
+  -> Ref.from(k, lo, xs):
+  match xs:
+    case Nil{}:
+      Unit{}
+    case +h <> +t:
+      (a, u, rt) = r
+      (le_trans(lo, c, Ref.rank(k, h), l, a), rng_from(t, k, c, Ref.rank(k, h), rt, u))
+
+# Peeling items in buckets c .. c + f ascends from c.
+def peel_from(+f: Nat, +xs: List<&2, Ref.Item>, +k: U32, +c: Nat, +lo: Nat, r: Rng(k, c, Nat.add(c, f), xs), l: {True{} == Nat.is_le(lo, c) : Bool})
+  -> Ref.from(k, lo, Ref.peel(f, xs, k, c)):
+  match f:
+    case 0n:
+      rng_from(xs, k, c, lo, rng_cast(k, c, c, Nat.add(c, 0n), xs, nat_add_zero(c), r), l)
+    case 1n+g:
+      +n = Ref.nes(xs, k, c)
+      from_append(Ref.eqs(xs, k, c), Ref.peel(g, n, k, 1n+c), k, lo, c, eqs_rng(xs, k, c), l,
+        peel_from(g, n, k, 1n+c, c, rng_cast(k, 1n+c, 1n+Nat.add(c, g), Nat.add(c, 1n+g), n, nat_add_succ(c, g),
+          nes_rng(xs, k, c, Nat.add(c, 1n+g), r)), le_succ(c)))
+
+def from_sorted(xs: List<&2, Ref.Item>, +k: U32, +lo: Nat, r: Ref.from(k, lo, xs)) -> Ref.Sorted(k, xs):
+  match xs:
+    case Nil{}:
+      Unit{}
+    case +h <> t:
+      (a, b) = r
+      b
+
+def Laws.sort_sorted(k, xs):
+  from_sorted(Ref.sort_items(k, xs), k, 0n,
+    peel_from(Nat.sub(Ref.buckets(k), 1n), xs, k, 0n, 0n, rng_all(k, xs), {==}))

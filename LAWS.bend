@@ -65,3 +65,24 @@ law histogram_total:
   for +k: U32
   for +xs: List<&2, U32>
   {Ref.sum(Ref.histogram(k, xs)) == U32.from_nat(List.length(&2, U32, xs)) : U32}
+
+# Sort
+# ----
+# Stated over the items (key, input index) that Ref.perm and Ref.sorted
+# read: Ref.perm(k, keys) is the items' indices, Ref.sorted(k, keys) their
+# keys.
+
+# LAW: the sort keeps every item as often as it was there (for any notion
+# of equality eq), so its output is a permutation of its input
+law sort_count:
+  for ~eq: Ref.Item -> Ref.Item -> Bool
+  for +y: Ref.Item
+  for +k: U32
+  for +xs: List<&2, Ref.Item>
+  {Ref.count(~eq, y, Ref.sort_items(k, xs)) == Ref.count(~eq, y, xs) : Nat}
+
+# LAW: the sort's output ascends by bucket
+law sort_sorted:
+  for +k: U32
+  for +xs: List<&2, Ref.Item>
+  Ref.Sorted(k, Ref.sort_items(k, xs))

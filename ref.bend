@@ -252,7 +252,7 @@ def from(+k: U32, +lo: Nat, xs: List<&2, Item>) -> Type:
     case Nil{}:
       Unit
     case +h <> t:
-      ({Nat.is_le(lo, rank(k, h)) == True{} : Bool} & from(k, rank(k, h), t))
+      ({True{} == Nat.is_le(lo, rank(k, h)) : Bool} & from(k, rank(k, h), t))
 
 # The items' buckets ascend.
 def Sorted(+k: U32, xs: List<&2, Item>) -> Type:
