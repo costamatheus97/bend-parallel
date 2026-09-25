@@ -2,7 +2,10 @@
 #
 # Scan: inductions on the list, where cons1 moves the head out of the
 # pair. Histogram: U32 addition is proven to step like Nat addition (bit by
-# bit, over Word(32n)), then one bump adds one to the sum.
+# bit, over Word(32n)), then one bump adds one to the sum. Sort: counts
+# split over each peeled bucket and the rest; the order rests on the bucket
+# bound (a clamped key's bucket is at most K - 1); stability on bucket c of
+# a peel being bucket c of its input.
 import Base
 import ./ref.bend as Ref
 import ./LAWS.bend as Laws
