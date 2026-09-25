@@ -3,8 +3,10 @@
 # 32-bit keys; K = n (256 buckets, 256 keys) at b 2 and 8, and 4096
 # keys that are a K = n shuffle-like spread; every key the largest U32 (all
 # sort as K - 1, so perm is the identity); raw keys with K = 1000 (most
-# clamp); K = 0 (one bucket). A line reads the case, then diff and hash
-# for perm, counts and offs; the hashes come from tests/lib/expect.py.
+# clamp); K = 0 (one bucket); b 12 and 13 (the table's rows split in
+# groups, evenly and not) and b 12 with K = 1. A line reads the case,
+# then diff and hash for perm, counts and offs; the hashes come from
+# tests/lib/expect.py.
 import Base
 import ../sort.bend as Sort
 import ../ref.bend as Ref
@@ -35,7 +37,10 @@ def main() -> IO(Unit):
     Unit <- one_case(12n, 6n, 4096, 1, 11, 4096)
     Unit <- one_case(6n, 2n, 16, 2, 0, 4294967295)
     Unit <- one_case(10n, 5n, 1000, 0, 6, 0)
-    one_case(7n, 3n, 0, 1, 7, 9)
+    Unit <- one_case(7n, 3n, 0, 1, 7, 9)
+    Unit <- one_case(12n, 12n, 1000, 1, 12, 1000)
+    Unit <- one_case(13n, 13n, 300, 1, 13, 300)
+    one_case(12n, 12n, 1, 0, 14, 0)
 
 #|d=0 b=0 k=5 kind=1 m=5 perm diff=0 hash=0 counts diff=0 hash=2345056881 offs diff=0 hash=3038898017
 #|d=0 b=4 k=1 kind=0 m=0 perm diff=0 hash=0 counts diff=0 hash=1 offs diff=0 hash=0
@@ -47,3 +52,6 @@ def main() -> IO(Unit):
 #|d=6 b=2 k=16 kind=2 m=4294967295 perm diff=0 hash=17251840 counts diff=0 hash=64 offs diff=0 hash=0
 #|d=10 b=5 k=1000 kind=0 m=0 perm diff=0 hash=3101179904 counts diff=0 hash=3681682432 offs diff=0 hash=736165888
 #|d=7 b=3 k=0 kind=1 m=9 perm diff=0 hash=1528536064 counts diff=0 hash=128 offs diff=0 hash=0
+#|d=12 b=12 k=1000 kind=1 m=1000 perm diff=0 hash=4093090128 counts diff=0 hash=2660530454 offs diff=0 hash=2635120297
+#|d=13 b=13 k=300 kind=1 m=300 perm diff=0 hash=1215014144 counts diff=0 hash=987465198 offs diff=0 hash=349423888
+#|d=12 b=12 k=1 kind=0 m=0 perm diff=0 hash=1488093184 counts diff=0 hash=4096 offs diff=0 hash=0

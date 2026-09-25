@@ -26,11 +26,19 @@
 # Passes:
 #   1. per block of keys, in parallel: the block's counts per bucket into
 #      its row of the table (histogram.bend's pass 1);
-#   2. per group of buckets, in parallel: each bucket's column sum into
-#      counts and offs; then offs becomes its exclusive scan (scan.bend),
-#      the buckets' first slots; then, per group of buckets again, each
-#      table entry becomes its bucket's first slot plus the counts of the
-#      rows above it: where the block's keys of that bucket start;
+#   2. from 2^12 rows up, the table's rows are cut into 2^(b/2) groups
+#      of rows (see histogram.bend): a) per (group of rows, group of
+#      buckets), in parallel: each column becomes its running sum within
+#      the group;
+#      b) per group of buckets, in parallel: over the groups' last rows,
+#      each bucket's total into counts and offs, and each group's base
+#      (the counts of the groups above it) into its last row; then offs
+#      becomes its exclusive scan (scan.bend), the buckets' first slots;
+#      c) per (group of rows, group of buckets) again: each table entry
+#      becomes its bucket's first slot plus the counts of the rows above
+#      it (base plus the running sum of the row before it): where the
+#      block's keys of that bucket start. Below 2^12 rows, one group
+#      of all the rows, and no a): b) sums each column, c) walks it down;
 #   3. per block, in parallel: each key, in order, takes the next slot of
 #      its bucket in the block's row, and perm[slot] becomes its index.
 #
@@ -72,58 +80,158 @@ def three.rejoin(a2: Array<U32>, b2: Array<U32>, c2: Array<U32>, r: Three) -> Th
   Three{a, b, c} = r
   Three{Array.join(U32, a, a2), Array.join(U32, b, b2), Array.join(U32, c, c2)}
 
-# Pass 2a: column sums into counts and offs
-# -----------------------------------------
+# Pass 2b: over the groups, column totals and group bases
+# --------------------------------------------------------
+
+# r holds the table and the entry x read at at: it becomes s, and the n
+# entries after it (each step further on) follow, from s + x. Returns the
+# table and the sum past the last.
+def xs.go(+n: Nat, +at: U32, +step: U32, +s: U32, r: Array<U32> & U32) -> Array<U32> & U32:
+  match n:
+    case 0n:
+      (t, +x) = r
+      (t[at] <- s, (s + x : U32))
+    case 1n+p:
+      (t, +x) = r
+      +q = (at + step : U32)
+      xs.go(p, q, step, (s + x : U32), (t[at] <- s)[q])
 
 def sum.put(+c: U32, cs: Array<U32>, os: Array<U32>, r: Array<U32> & U32) -> Three:
   (t, +v) = r
   Three{t, cs[c] <- v, os[c] <- v}
 
-# Column c: its sum over the nb + 1 rows into cs[c] and os[c] when c < K,
-# else 0 into both.
-def sum.one(lt: Bool, +c: U32, +kb: Nat, +nb: Nat, p: Three) -> Three:
+# The nb + 1 entries from at, step apart: their sum; when wr, each also
+# becomes the sum of those before it.
+def sum.col(+wr: Bool, +at: U32, +step: U32, +nb: Nat, t: Array<U32>) -> Array<U32> & U32:
+  match wr:
+    case True{}:
+      xs.go(nb, at, step, 0, t[at])
+    case False{}:
+      Hist.col.go(nb, at, step, 0, t[at])
+
+# Column c, when c < K: over its nb + 1 entries from o + c, step apart
+# (the groups' last rows, or all the rows of a small table), the total
+# into cs[c] and os[c], by sum.col. Else 0 into both.
+def sum.one(lt: Bool, +wr: Bool, +c: U32, +o: U32, +step: U32, +nb: Nat, p: Three) -> Three:
   match lt:
     case True{}:
       Three{t, cs, os} = p
-      sum.put(c, cs, os, Hist.col.go(nb, c, U32.shln(1, kb), 0, t[c]))
+      sum.put(c, cs, os, sum.col(wr, (o + c : U32), step, nb, t))
     case False{}:
       Three{t, cs, os} = p
       Three{t, cs[c] <- 0, os[c] <- 0}
 
 # Columns c to c + n.
-def sum.go(+n: Nat, +c: U32, +k: U32, +kb: Nat, +nb: Nat, p: Three) -> Three:
+def sum.go(+n: Nat, +wr: Bool, +c: U32, +k: U32, +o: U32, +step: U32, +nb: Nat, p: Three) -> Three:
   match n:
     case 0n:
-      sum.one(U32.is_lt(c, k), c, kb, nb, p)
+      sum.one(U32.is_lt(c, k), wr, c, o, step, nb, p)
     case 1n+q:
-      sum.go(q, (c + 1 : U32), k, kb, nb, sum.one(U32.is_lt(c, k), c, kb, nb, p))
+      sum.go(q, wr, (c + 1 : U32), k, o, step, nb, sum.one(U32.is_lt(c, k), wr, c, o, step, nb, p))
 
-# Pass 2a's forks: d levels down to groups of 2^w columns under group j,
+# Pass 2b's forks: d levels down to groups of 2^w columns under group j,
 # with two handles each to the table, the counts and the offsets. Group j
-# reads only its columns of the table and writes only its own entries of
-# counts and offs (j * 2^w to j * 2^w + 2^w - 1).
-def sums(+d: Nat, +j: U32, +w: Nat, +k: U32, +kb: Nat, +nb: Nat, ft: Array<U32> & Array<U32>, fc: Array<U32> & Array<U32>, fo: Array<U32> & Array<U32>) -> Three:
+# reads (and when wr writes) only its columns of the table and writes
+# only its own entries of counts and offs (j * 2^w to j * 2^w + 2^w - 1).
+def sums(+d: Nat, +wr: Bool, +j: U32, +w: Nat, +k: U32, +o: U32, +step: U32, +nb: Nat, ft: Array<U32> & Array<U32>, fc: Array<U32> & Array<U32>, fo: Array<U32> & Array<U32>) -> Three:
   match d:
     case 0n:
       (t, t2) = ft
       (cs, cs2) = fc
       (os, os2) = fo
-      three.rejoin(t2, cs2, os2, sum.go(U32.to_nat((U32.shln(1, w) - 1 : U32)), U32.shln(j, w), k, kb, nb, Three{t, cs, os}))
+      three.rejoin(t2, cs2, os2, sum.go(U32.to_nat((U32.shln(1, w) - 1 : U32)), wr, U32.shln(j, w), k, o, step, nb, Three{t, cs, os}))
     case 1n+p:
       (t0, t1) = ft
       (c0, c1) = fc
       (o0, o1) = fo
       +i = (j * 2 : U32)
-      l r = sums(p, i, w, k, kb, nb, Array.fork(U32, t0), Array.fork(U32, c0), Array.fork(U32, o0))
-        sums(p, (i + 1 : U32), w, k, kb, nb, Array.fork(U32, t1), Array.fork(U32, c1), Array.fork(U32, o1))
+      l r = sums(p, wr, i, w, k, o, step, nb, Array.fork(U32, t0), Array.fork(U32, c0), Array.fork(U32, o0))
+        sums(p, wr, (i + 1 : U32), w, k, o, step, nb, Array.fork(U32, t1), Array.fork(U32, c1), Array.fork(U32, o1))
       three.join(l, r)
 
 # Pass 2c: each table entry becomes its block's first slot
 # --------------------------------------------------------
 
+def base.fin(+q: U32, +s: U32, t: Array<U32>) -> Array<U32>:
+  t[q] <- s
+
+# r holds the table and x, the entry a row (step) above at, which holds
+# the group's running sum through that row: at becomes s + x, and so up
+# for the n rows above; the group's first row, the next above, becomes s.
+def base.go(+n: Nat, +at: U32, +step: U32, +s: U32, r: Array<U32> & U32) -> Array<U32>:
+  match n:
+    case 0n:
+      (t, +x) = r
+      base.fin((at - step : U32), s, t[at] <- (s + x : U32))
+    case 1n+p:
+      (t, +x) = r
+      +q = (at - step : U32)
+      base.go(p, q, step, s, (t[at] <- (s + x : U32))[(q - step : U32)])
+
+# A group's column from its last row at (nm + 1 rows): r holds the table
+# and the group's base b, which the last row holds; o is offs[c].
+def base.at(+at: U32, +step: U32, +nm: Nat, +o: U32, r: Array<U32> & U32) -> Array<U32>:
+  match nm:
+    case 0n:
+      (t, +b) = r
+      t[at] <- (o + b : U32)
+    case 1n+p:
+      (t, +b) = r
+      base.go(p, at, step, (o + b : U32), t[(at - step : U32)])
+
+def base.os(+c: U32, +last: U32, +step: U32, +nm: Nat, t: Array<U32>, r: Array<U32> & U32) -> Hist.Two:
+  (os, +o) = r
+  Hist.Two{base.at((last + c : U32), step, nm, o, t[(last + c : U32)]), os}
+
+# Column c of a group, when c < K: from its first slot offs[c] plus the
+# group's base, which its last row holds.
+def base.one(lt: Bool, +c: U32, +last: U32, +step: U32, +nm: Nat, p: Hist.Two) -> Hist.Two:
+  match lt:
+    case True{}:
+      Hist.Two{t, os} = p
+      base.os(c, last, step, nm, t, os[c])
+    case False{}:
+      p
+
+# Columns c to c + n of a group.
+def base.cols(+n: Nat, +c: U32, +k: U32, +last: U32, +step: U32, +nm: Nat, p: Hist.Two) -> Hist.Two:
+  match n:
+    case 0n:
+      base.one(U32.is_lt(c, k), c, last, step, nm, p)
+    case 1n+q:
+      base.cols(q, (c + 1 : U32), k, last, step, nm, base.one(U32.is_lt(c, k), c, last, step, nm, p))
+
+# Lane i: rows group i / 2^gc, columns group i % 2^gc (as Hist.grp.leaf).
+def base.leaf(+i: U32, +gc: Nat, +w: Nat, +m: Nat, +kb: Nat, +k: U32, p: Hist.Two) -> Hist.Two:
+  +g = U32.shrn(i, gc)
+  +j = (i - U32.shln(g, gc) : U32)
+  +last = (U32.shln(g, Nat.add(m, kb)) + U32.shln((U32.shln(1, m) - 1 : U32), kb) : U32)
+  base.cols(U32.to_nat((U32.shln(1, w) - 1 : U32)), U32.shln(j, w), k, last, U32.shln(1, kb),
+    U32.to_nat((U32.shln(1, m) - 1 : U32)), p)
+
+# Pass 2c's forks, shaped as pass 2a's (Hist.grp), with two handles each
+# to the table and the offsets. Lane i reads the offsets and reads and
+# writes only its group's rows in its columns.
+def bases(+d: Nat, +i: U32, +gc: Nat, +w: Nat, +m: Nat, +kb: Nat, +k: U32, ft: Array<U32> & Array<U32>, fo: Array<U32> & Array<U32>) -> Hist.Two:
+  match d:
+    case 0n:
+      (t, t2) = ft
+      (os, os2) = fo
+      Hist.two.rejoin(t2, os2, base.leaf(i, gc, w, m, kb, k, Hist.Two{t, os}))
+    case 1n+p:
+      (t0, t1) = ft
+      (o0, o1) = fo
+      +j = (i * 2 : U32)
+      l r = bases(p, j, gc, w, m, kb, k, Array.fork(U32, t0), Array.fork(U32, o0))
+        bases(p, (j + 1 : U32), gc, w, m, kb, k, Array.fork(U32, t1), Array.fork(U32, o1))
+      Hist.two.join(l, r)
+
+# Pass 2c for a small table (see Hist.small): each column in one walk
+# ------------------------------------------------------------------
+
 # r holds the table and the entry x read at at: it becomes s, and the n
 # entries after it (each step further on) follow, from s + x.
-def base.go(+n: Nat, +at: U32, +step: U32, +s: U32, r: Array<U32> & U32) -> Array<U32>:
+def fwd.go(+n: Nat, +at: U32, +step: U32, +s: U32, r: Array<U32> & U32) -> Array<U32>:
   match n:
     case 0n:
       (t, +x) = r
@@ -131,44 +239,44 @@ def base.go(+n: Nat, +at: U32, +step: U32, +s: U32, r: Array<U32> & U32) -> Arra
     case 1n+p:
       (t, +x) = r
       +q = (at + step : U32)
-      base.go(p, q, step, (s + x : U32), (t[at] <- s)[q])
+      fwd.go(p, q, step, (s + x : U32), (t[at] <- s)[q])
 
-def base.at(+c: U32, +kb: Nat, +nb: Nat, t: Array<U32>, r: Array<U32> & U32) -> Hist.Two:
+def fwd.at(+c: U32, +kb: Nat, +nb: Nat, t: Array<U32>, r: Array<U32> & U32) -> Hist.Two:
   (os, +s) = r
-  Hist.Two{base.go(nb, c, U32.shln(1, kb), s, t[c]), os}
+  Hist.Two{fwd.go(nb, c, U32.shln(1, kb), s, t[c]), os}
 
 # Column c, when c < K: its entries from its first slot offs[c].
-def base.one(lt: Bool, +c: U32, +kb: Nat, +nb: Nat, p: Hist.Two) -> Hist.Two:
+def fwd.one(lt: Bool, +c: U32, +kb: Nat, +nb: Nat, p: Hist.Two) -> Hist.Two:
   match lt:
     case True{}:
       Hist.Two{t, os} = p
-      base.at(c, kb, nb, t, os[c])
+      fwd.at(c, kb, nb, t, os[c])
     case False{}:
       p
 
 # Columns c to c + n.
-def base.cols(+n: Nat, +c: U32, +k: U32, +kb: Nat, +nb: Nat, p: Hist.Two) -> Hist.Two:
+def fwd.cols(+n: Nat, +c: U32, +k: U32, +kb: Nat, +nb: Nat, p: Hist.Two) -> Hist.Two:
   match n:
     case 0n:
-      base.one(U32.is_lt(c, k), c, kb, nb, p)
+      fwd.one(U32.is_lt(c, k), c, kb, nb, p)
     case 1n+q:
-      base.cols(q, (c + 1 : U32), k, kb, nb, base.one(U32.is_lt(c, k), c, kb, nb, p))
+      fwd.cols(q, (c + 1 : U32), k, kb, nb, fwd.one(U32.is_lt(c, k), c, kb, nb, p))
 
-# Pass 2c's forks, shaped as pass 2a's, with two handles each to the table
-# and the offsets. Group j reads only its own offsets and reads and
-# writes only its columns of the table.
-def bases(+d: Nat, +j: U32, +w: Nat, +k: U32, +kb: Nat, +nb: Nat, ft: Array<U32> & Array<U32>, fo: Array<U32> & Array<U32>) -> Hist.Two:
+# The forks, shaped as pass 2b's, with two handles each to the table and
+# the offsets. Group j reads only its own offsets and reads and writes
+# only its columns of the table.
+def fwds(+d: Nat, +j: U32, +w: Nat, +k: U32, +kb: Nat, +nb: Nat, ft: Array<U32> & Array<U32>, fo: Array<U32> & Array<U32>) -> Hist.Two:
   match d:
     case 0n:
       (t, t2) = ft
       (os, os2) = fo
-      Hist.two.rejoin(t2, os2, base.cols(U32.to_nat((U32.shln(1, w) - 1 : U32)), U32.shln(j, w), k, kb, nb, Hist.Two{t, os}))
+      Hist.two.rejoin(t2, os2, fwd.cols(U32.to_nat((U32.shln(1, w) - 1 : U32)), U32.shln(j, w), k, kb, nb, Hist.Two{t, os}))
     case 1n+p:
       (t0, t1) = ft
       (o0, o1) = fo
       +i = (j * 2 : U32)
-      l r = bases(p, i, w, k, kb, nb, Array.fork(U32, t0), Array.fork(U32, o0))
-        bases(p, (i + 1 : U32), w, k, kb, nb, Array.fork(U32, t1), Array.fork(U32, o1))
+      l r = fwds(p, i, w, k, kb, nb, Array.fork(U32, t0), Array.fork(U32, o0))
+        fwds(p, (i + 1 : U32), w, k, kb, nb, Array.fork(U32, t1), Array.fork(U32, o1))
       Hist.two.join(l, r)
 
 # Pass 3: scatter
@@ -238,26 +346,53 @@ def run.puts(+d: Nat, +e: Nat, +kb: Nat, +k: U32, ks: Array<U32>, pm: Array<U32>
   Hist.Two{t, os} = r
   run.fin(cs, os, puts(d, 0, e, kb, k, Array.fork(U32, ks), Array.fork(U32, t), Array.fork(U32, pm)))
 
-# Pass 2c.
-def run.bases(+d: Nat, +e: Nat, +kb: Nat, +k: U32, ks: Array<U32>, pm: Array<U32>, cs: Array<U32>, t: Array<U32>, r: Array<U32> & U32) -> Array<U32> & Bufs:
-  (os, +n) = r
-  +g = Nat.min(d, kb)
-  run.puts(d, e, kb, k, ks, pm, cs, bases(g, 0, Nat.sub(kb, g), k, kb,
-    U32.to_nat((U32.shln(1, d) - 1 : U32)), Array.fork(U32, t), Array.fork(U32, os)))
+# Pass 2c: by fwds when lo (a small table), else by bases.
+def run.bases(lo: Bool, +d: Nat, +e: Nat, +kb: Nat, +k: U32, ks: Array<U32>, pm: Array<U32>, cs: Array<U32>, t: Array<U32>, r: Array<U32> & U32) -> Array<U32> & Bufs:
+  match lo:
+    case True{}:
+      (os, +n) = r
+      +g = Nat.min(d, kb)
+      run.puts(d, e, kb, k, ks, pm, cs, fwds(g, 0, Nat.sub(kb, g), k, kb,
+        U32.to_nat((U32.shln(1, d) - 1 : U32)), Array.fork(U32, t), Array.fork(U32, os)))
+    case False{}:
+      (os, +n) = r
+      +g = Nat.min(d, kb)
+      +h = Scan.half(d)
+      run.puts(d, e, kb, k, ks, pm, cs, bases(Nat.add(h, g), 0, g, Nat.sub(kb, g), Nat.sub(d, h), kb, k,
+        Array.fork(U32, t), Array.fork(U32, os)))
 
-# Pass 2b: offs becomes its exclusive scan.
-def run.scan(+d: Nat, +e: Nat, +kb: Nat, +k: U32, ks: Array<U32>, pm: Array<U32>, r: Three) -> Array<U32> & Bufs:
+# Pass 2b's scan: offs becomes its exclusive scan.
+def run.scan(lo: Bool, +d: Nat, +e: Nat, +kb: Nat, +k: U32, ks: Array<U32>, pm: Array<U32>, r: Three) -> Array<U32> & Bufs:
   Three{t, cs, os} = r
-  run.bases(d, e, kb, k, ks, pm, cs, t, Scan.exclusive(d, os))
+  run.bases(lo, d, e, kb, k, ks, pm, cs, t, Scan.exclusive(d, os))
 
-# Pass 2a.
-def run.sums(+d: Nat, +e: Nat, +kb: Nat, +k: U32, pm: Array<U32>, cs: Array<U32>, os: Array<U32>, r: Hist.Two) -> Array<U32> & Bufs:
-  Hist.Two{ks, t} = r
+# Pass 2b, after 2a (t): over the 2^h groups' last rows.
+def run.tots(+d: Nat, +e: Nat, +kb: Nat, +k: U32, ks: Array<U32>, pm: Array<U32>, cs: Array<U32>, os: Array<U32>, t: Array<U32>) -> Array<U32> & Bufs:
   +g = Nat.min(d, kb)
-  run.scan(d, e, kb, k, ks, pm, sums(g, 0, Nat.sub(kb, g), k, kb,
-    U32.to_nat((U32.shln(1, d) - 1 : U32)), Array.fork(U32, t),
+  +h = Scan.half(d)
+  +m = Nat.sub(d, h)
+  run.scan(False{}, d, e, kb, k, ks, pm, sums(g, True{}, 0, Nat.sub(kb, g), k, U32.shln((U32.shln(1, m) - 1 : U32), kb),
+    U32.shln(1, Nat.add(m, kb)), U32.to_nat((U32.shln(1, h) - 1 : U32)), Array.fork(U32, t),
     Array.fork(U32, Hist.fit.eq(kb, Array.size(U32, cs))),
     Array.fork(U32, Hist.fit.eq(kb, Array.size(U32, os)))))
+
+# Pass 2a: each group's running column sums (Hist.grp), then 2b. For a
+# small table (lo), no 2a: 2b sums each column over all the rows.
+def run.sums(lo: Bool, +d: Nat, +e: Nat, +kb: Nat, +k: U32, pm: Array<U32>, cs: Array<U32>, os: Array<U32>, r: Hist.Two) -> Array<U32> & Bufs:
+  match lo:
+    case True{}:
+      Hist.Two{ks, t} = r
+      +g = Nat.min(d, kb)
+      run.scan(True{}, d, e, kb, k, ks, pm, sums(g, False{}, 0, Nat.sub(kb, g), k, 0, U32.shln(1, kb),
+        U32.to_nat((U32.shln(1, d) - 1 : U32)), Array.fork(U32, t),
+        Array.fork(U32, Hist.fit.eq(kb, Array.size(U32, cs))),
+        Array.fork(U32, Hist.fit.eq(kb, Array.size(U32, os)))))
+    case False{}:
+      Hist.Two{ks, t} = r
+      +g = Nat.min(d, kb)
+      +h = Scan.half(d)
+      run.tots(d, e, kb, k, ks, pm, cs, os, Hist.grp(Nat.add(h, g), True{}, 0, g, Nat.sub(kb, g), Nat.sub(d, h), kb, k,
+        Array.fork(U32, t)))
 
 # Pass 1.
 def run(+b: Nat, +k: U32, bufs: Bufs, r: Array<U32> & U32) -> Array<U32> & Bufs:
@@ -268,7 +403,7 @@ def run(+b: Nat, +k: U32, bufs: Bufs, r: Array<U32> & U32) -> Array<U32> & Bufs:
   +lg = U32.log2(n)
   +d = Nat.min(b, lg)
   +e = Nat.sub(lg, d)
-  run.sums(d, e, kb, kk, Hist.fit.eq(lg, Array.size(U32, pm)), cs, os, Hist.rows(d, 0, e, kb, kk,
+  run.sums(Hist.small(d), d, e, kb, kk, Hist.fit.eq(lg, Array.size(U32, pm)), cs, os, Hist.rows(d, 0, e, kb, kk,
     Array.fork(U32, ks), Array.fork(U32, Hist.fit.ge(Nat.add(d, kb), Array.size(U32, t)))))
 
 # Gather

@@ -16,8 +16,9 @@
 #
 # Three passes, with no atomics:
 #   1. per block, in parallel: the block's sum into s[i];
-#   2. one lane: s becomes its exclusive scan (the blocks' bases) and the
-#      total;
+#   2. s becomes its exclusive scan (the blocks' bases) and the total: on
+#      one lane below 2^12 sums; else by this same scan at half the depth
+#      (the 2^b sums in 2^(b/2) blocks), whose own pass 2 runs on one lane;
 #   3. per block, in parallel: the block's scan from its base, in place.
 # ref.bend's exclusive and inclusive are the sequential references; the
 # tests check both passes against them bit for bit at many sizes and b.
@@ -161,25 +162,64 @@ def puts(+inc: Bool, +d: Nat, +i: U32, +e: Nat, fa: Array<U32> & Array<U32>, fs:
 # Driver
 # ------
 
+# floor(d / 2).
+def half(+d: Nat) -> Nat:
+  match d:
+    case 0n:
+      0n
+    case 1n+p:
+      match p:
+        case 0n:
+          0n
+        case 1n+q:
+          1n+half(q)
+
 def run.fin(r: Two, +total: U32) -> Array<U32> & U32:
   Two{a, s} = r
   (a, total)
 
-# Pass 2 on one lane (2^d sums), then pass 3.
+# Pass 3, from pass 2's bases and total.
 def run.mid(+inc: Bool, +d: Nat, +e: Nat, a: Array<U32>, r: Array<U32> & U32) -> Array<U32> & U32:
   (s, +total) = r
   run.fin(puts(inc, d, 0, e, Array.fork(U32, a), Array.fork(U32, s)), total)
 
-def run.sums(+inc: Bool, +d: Nat, +e: Nat, r: Two) -> Array<U32> & U32:
+# Pass 1 over a (2^lg entries) at depth d, into a new s.
+def run.pre(+d: Nat, +e: Nat, a: Array<U32>) -> Two:
+  sums(d, 0, e, Array.fork(U32, a), Array.fork(U32, Array.new(U32, d, 0)))
+
+# The scan with pass 2 on one lane.
+def run0.sums(+inc: Bool, +d: Nat, +e: Nat, r: Two) -> Array<U32> & U32:
   Two{a, s} = r
   run.mid(inc, d, e, a, ex.go(U32.to_nat((U32.shln(1, d) - 1 : U32)), 0, 0, s[0]))
+
+def run0(+inc: Bool, +b: Nat, r: Array<U32> & U32) -> Array<U32> & U32:
+  (a, +n) = r
+  +lg = U32.log2(n)
+  +d = Nat.min(b, lg)
+  +e = Nat.sub(lg, d)
+  run0.sums(inc, d, e, run.pre(d, e, a))
+
+# The scan with pass 2 by run0 at depth d / 2.
+def run1.sums(+inc: Bool, +d: Nat, +e: Nat, r: Two) -> Array<U32> & U32:
+  Two{a, s} = r
+  run.mid(inc, d, e, a, run0(False{}, half(d), Array.size(U32, s)))
+
+# Pass 2 by run1 from 2^12 sums up, else on one lane: on the GPU we
+# measured, the nested scan's forks cost more than one lane's walk below
+# that.
+def run.pick(lo: Bool, +inc: Bool, +d: Nat, +e: Nat, r: Two) -> Array<U32> & U32:
+  match lo:
+    case True{}:
+      run0.sums(inc, d, e, r)
+    case False{}:
+      run1.sums(inc, d, e, r)
 
 def run(+inc: Bool, +b: Nat, r: Array<U32> & U32) -> Array<U32> & U32:
   (a, +n) = r
   +lg = U32.log2(n)
   +d = Nat.min(b, lg)
   +e = Nat.sub(lg, d)
-  run.sums(inc, d, e, sums(d, 0, e, Array.fork(U32, a), Array.fork(U32, Array.new(U32, d, 0))))
+  run.pick(U32.is_lt(U32.from_nat(d), 12), inc, d, e, run.pre(d, e, a))
 
 # API
 # ---

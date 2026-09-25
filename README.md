@@ -53,7 +53,10 @@ as `U32.add` does. See the example below for a complete program.
 There are three passes:
 
 1. Each block computes its own sum, in parallel.
-2. One lane scans the 2^b block sums.
+2. The 2^b block sums are scanned. Below 2^12 sums, one lane scans them.
+   From 2^12 up, the same three passes scan them at depth b/2, and that
+   scan's own pass 2 runs on one lane, so no lane walks more than about
+   2^(b/2) sums.
 3. Each block scans itself from its base, in parallel.
 
 ### Histogram
@@ -74,7 +77,17 @@ There are two passes:
 
 1. Each block counts its keys into its own row of the table (2^b rows of
    2^ceil(log2 K) counts).
-2. Each group of buckets sums its columns.
+2. Each group of buckets sums its columns. From 2^12 rows up, this takes
+   two steps. The rows are cut into 2^(b/2) groups. First, each (group of
+   rows, group of buckets) sums its part of each column. Then each group
+   of buckets adds up those partial sums. No lane walks more than about
+   2^(b/2) rows. The sort's pass 2 cuts its table the same way.
+
+The 2^12 thresholds were measured on one GPU: below them, the extra
+step's forks cost more than they save.
+
+Don't read the table after a call: from 2^12 rows up it holds partial
+sums, not the per-block counts.
 
 ### Sort
 
@@ -320,7 +333,8 @@ length, pad it up to the next power of two:
   - the table is 2^(b + ceil(log2 K)) words, so a large K times a large b
     grows fast;
   - K is rounded up to a power of two for the counts.
-- Pass 2 of the scan runs on one lane over 2^b block sums.
+- The innermost level of the scan's pass 2 runs on one lane, over up to
+  2^11 sums below 2^12 blocks, else about 2^(b/2).
 - The references in `ref.bend` are specs, not fast code. The sort and
   histogram references are O(n * K).
 - Allocation under `!` fills on one lane (see Buffers).

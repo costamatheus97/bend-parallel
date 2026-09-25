@@ -2,7 +2,8 @@
 # largest U32) at b 0 and 3; 1024 equal entries (1: the scan is 0, 1, ..;
 # the largest U32: every sum wraps); 4096 largest entries at b 5; b far
 # past log2 n; 16384 random entries at b 8 (the JS lane's stack holds the
-# list reference's recursion up to about this size; 65536 overflows it).
+# list reference's recursion up to about this size; 65536 overflows it);
+# random entries at b 12 and 13, where pass 2 is itself a scan.
 # A line reads: the scan, the case, diff against the reference (plus 1 if
 # the totals differ), the hash and the total. The hashes and totals come
 # from tests/lib/expect.py.
@@ -58,7 +59,9 @@ def both(+inc: Bool) -> IO(Unit):
     Unit <- one_case(inc, 10n, 0n, 2, 0, 4294967295)
     Unit <- one_case(inc, 12n, 5n, 2, 0, 4294967295)
     Unit <- one_case(inc, 3n, 30n, 0, 9, 0)
-    one_case(inc, 14n, 8n, 0, 16, 0)
+    Unit <- one_case(inc, 14n, 8n, 0, 16, 0)
+    Unit <- one_case(inc, 12n, 12n, 0, 17, 0)
+    one_case(inc, 14n, 13n, 0, 18, 0)
 
 def main() -> IO(Unit):
   do IO<Unit>:
@@ -74,6 +77,8 @@ def main() -> IO(Unit):
 #|ex d=12 b=5 kind=2 m=4294967295 diff=0 hash=1208102912 total=4294963200
 #|ex d=3 b=30 kind=0 m=0 diff=0 hash=2982198000 total=4012700955
 #|ex d=14 b=8 kind=0 m=0 diff=0 hash=687737219 total=2270931363
+#|ex d=12 b=12 kind=0 m=0 diff=0 hash=2990211935 total=1231173197
+#|ex d=14 b=13 kind=0 m=0 diff=0 hash=1533491871 total=1869478375
 #|in d=0 b=0 kind=2 m=0 diff=0 hash=0 total=0
 #|in d=0 b=3 kind=2 m=7 diff=0 hash=7 total=7
 #|in d=0 b=0 kind=2 m=4294967295 diff=0 hash=4294967295 total=4294967295
@@ -83,3 +88,5 @@ def main() -> IO(Unit):
 #|in d=12 b=5 kind=2 m=4294967295 diff=0 hash=3721183232 total=4294963200
 #|in d=3 b=30 kind=0 m=0 diff=0 hash=2801818347 total=4012700955
 #|in d=14 b=8 kind=0 m=0 diff=0 hash=3356743472 total=2270931363
+#|in d=12 b=12 kind=0 m=0 diff=0 hash=866913762 total=1231173197
+#|in d=14 b=13 kind=0 m=0 diff=0 hash=3629143816 total=1869478375

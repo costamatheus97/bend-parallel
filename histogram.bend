@@ -22,14 +22,23 @@
 # Two passes:
 #   1. per block of keys, in parallel: zero the block's row of the table,
 #      then count its keys into it (the block owns its row);
-#   2. per group of buckets, in parallel: a bucket's count is the sum of
-#      its column over the rows (the group owns its counts).
-# ref.bend's histogram is the sequential reference.
+#   2. the column sums. Below 2^12 rows, per group of buckets, in
+#      parallel: a bucket's count is the sum of its column over the rows
+#      (the group owns its counts). From 2^12 rows up, in two steps: the
+#      2^b rows are cut into 2^(b/2) groups of rows; a) per (group of
+#      rows, group of buckets), in parallel: each bucket's sum over the
+#      group's rows into the group's last row; b) per group of buckets, in
+#      parallel: a bucket's count is the sum of those. Every lane walks
+#      2^(b/2) rows at most, not 2^b.
+# After a call the table holds scratch (from 2^12 rows up, partial sums
+# in the groups' last rows), not per-block counts. ref.bend's histogram
+# is the sequential reference.
 #
 # Sharing: as in scan.bend, lanes share arrays through Base's @unsafe
 # Array.fork and Array.join; no def here is @unsafe itself, and none may
 # be evaluated in the checker (call them from an IO main).
 import Base
+import ./scan.bend as Scan
 
 # Buffers
 # -------
@@ -149,6 +158,15 @@ def rows(+d: Nat, +i: U32, +e: Nat, +kb: Nat, +k: U32, fk: Array<U32> & Array<U3
 # Pass 2: columns
 # ---------------
 
+# From 2^12 rows up (see small, below), the table's 2^d rows are cut into
+# 2^r groups of 2^m (r = d / 2): the column passes step over the rows of
+# a group, then over the groups. Below, one pass steps over all the rows:
+# on the GPU we measured, the split costs more than it saves there.
+
+# d is below 12: the table is small, and its rows are not split.
+def small(+d: Nat) -> Bool:
+  U32.is_lt(U32.from_nat(d), 12)
+
 # r holds the table and the entry x read at at: adds x and the n entries
 # after it, each step further on, to s.
 def col.go(+n: Nat, +at: U32, +step: U32, +s: U32, r: Array<U32> & U32) -> Array<U32> & U32:
@@ -161,45 +179,108 @@ def col.go(+n: Nat, +at: U32, +step: U32, +s: U32, r: Array<U32> & U32) -> Array
       +q = (at + step : U32)
       col.go(p, q, step, (s + x : U32), t[q])
 
+# As col.go, but each entry becomes the sum through it (in place).
+def ins.go(+n: Nat, +at: U32, +step: U32, +s: U32, r: Array<U32> & U32) -> Array<U32>:
+  match n:
+    case 0n:
+      (t, +x) = r
+      t[at] <- (s + x : U32)
+    case 1n+p:
+      (t, +x) = r
+      +v = (s + x : U32)
+      +q = (at + step : U32)
+      ins.go(p, q, step, v, (t[at] <- v)[q])
+
+def grp.put(+at: U32, r: Array<U32> & U32) -> Array<U32>:
+  (t, +v) = r
+  t[at] <- v
+
+# Column c of a group (rows from top, nm + 1 of them, step apart), when
+# c < K: sc, each entry becomes the group's sum through it; else the sum
+# goes into the last row (at last).
+def grp.one(lt: Bool, +sc: Bool, +c: U32, +top: U32, +last: U32, +step: U32, +nm: Nat, t: Array<U32>) -> Array<U32>:
+  match lt:
+    case True{}:
+      match sc:
+        case True{}:
+          ins.go(nm, (top + c : U32), step, 0, t[(top + c : U32)])
+        case False{}:
+          grp.put((last + c : U32), col.go(nm, (top + c : U32), step, 0, t[(top + c : U32)]))
+    case False{}:
+      t
+
+# Columns c to c + n of a group.
+def grp.go(+n: Nat, +sc: Bool, +c: U32, +k: U32, +top: U32, +last: U32, +step: U32, +nm: Nat, t: Array<U32>) -> Array<U32>:
+  match n:
+    case 0n:
+      grp.one(U32.is_lt(c, k), sc, c, top, last, step, nm, t)
+    case 1n+q:
+      grp.go(q, sc, (c + 1 : U32), k, top, last, step, nm, grp.one(U32.is_lt(c, k), sc, c, top, last, step, nm, t))
+
+# Lane i: rows group i / 2^gc (2^m rows of 2^kb), columns group i % 2^gc
+# (2^w columns).
+def grp.leaf(+sc: Bool, +i: U32, +gc: Nat, +w: Nat, +m: Nat, +kb: Nat, +k: U32, t: Array<U32>) -> Array<U32>:
+  +g = U32.shrn(i, gc)
+  +j = (i - U32.shln(g, gc) : U32)
+  +top = U32.shln(g, Nat.add(m, kb))
+  +last = (top + U32.shln((U32.shln(1, m) - 1 : U32), kb) : U32)
+  grp.go(U32.to_nat((U32.shln(1, w) - 1 : U32)), sc, U32.shln(j, w), k, top, last, U32.shln(1, kb),
+    U32.to_nat((U32.shln(1, m) - 1 : U32)), t)
+
+# Pass 2a's forks (sort.bend's too, with sc): d levels down to the lanes
+# under lane i, with two handles to the table. Lane i reads and writes
+# only its group's rows in its columns: no two lanes touch one slot.
+def grp(+d: Nat, +sc: Bool, +i: U32, +gc: Nat, +w: Nat, +m: Nat, +kb: Nat, +k: U32, ft: Array<U32> & Array<U32>) -> Array<U32>:
+  match d:
+    case 0n:
+      (t, t2) = ft
+      Array.join(U32, grp.leaf(sc, i, gc, w, m, kb, k, t), t2)
+    case 1n+p:
+      (t0, t1) = ft
+      +j = (i * 2 : U32)
+      l r = grp(p, sc, j, gc, w, m, kb, k, Array.fork(U32, t0))
+        grp(p, sc, (j + 1 : U32), gc, w, m, kb, k, Array.fork(U32, t1))
+      Array.join(U32, l, r)
+
 def col.put(+c: U32, cs: Array<U32>, r: Array<U32> & U32) -> Two:
   (t, +v) = r
   Two{t, cs[c] <- v}
 
-# Column c's count into cs[c]: its sum over the nb + 1 rows when c < K,
-# else 0.
-def col.one(lt: Bool, +c: U32, +kb: Nat, +nb: Nat, p: Two) -> Two:
+# Column c's count into cs[c]: the sum of its nb + 1 entries from o + c,
+# step apart (the groups' last rows), when c < K; else 0.
+def col.one(lt: Bool, +c: U32, +o: U32, +step: U32, +nb: Nat, p: Two) -> Two:
   match lt:
     case True{}:
       Two{t, cs} = p
-      col.put(c, cs, col.go(nb, c, U32.shln(1, kb), 0, t[c]))
+      col.put(c, cs, col.go(nb, (o + c : U32), step, 0, t[(o + c : U32)]))
     case False{}:
       Two{t, cs} = p
       Two{t, cs[c] <- 0}
 
 # Columns c to c + n.
-def cols.go(+n: Nat, +c: U32, +k: U32, +kb: Nat, +nb: Nat, p: Two) -> Two:
+def cols.go(+n: Nat, +c: U32, +k: U32, +o: U32, +step: U32, +nb: Nat, p: Two) -> Two:
   match n:
     case 0n:
-      col.one(U32.is_lt(c, k), c, kb, nb, p)
+      col.one(U32.is_lt(c, k), c, o, step, nb, p)
     case 1n+q:
-      cols.go(q, (c + 1 : U32), k, kb, nb, col.one(U32.is_lt(c, k), c, kb, nb, p))
+      cols.go(q, (c + 1 : U32), k, o, step, nb, col.one(U32.is_lt(c, k), c, o, step, nb, p))
 
-# Pass 2's forks: d levels down to groups of 2^w columns under group index
+# Pass 2b's forks: d levels down to groups of 2^w columns under group index
 # j. ft and fc are two handles each to the table and the counts. Group j
 # reads only its columns of the table and writes only its counts (entries
 # j * 2^w to j * 2^w + 2^w - 1): no two lanes write one slot.
-def cols(+d: Nat, +j: U32, +w: Nat, +k: U32, +kb: Nat, +nb: Nat, ft: Array<U32> & Array<U32>, fc: Array<U32> & Array<U32>) -> Two:
+def cols(+d: Nat, +j: U32, +w: Nat, +k: U32, +o: U32, +step: U32, +nb: Nat, ft: Array<U32> & Array<U32>, fc: Array<U32> & Array<U32>) -> Two:
   match d:
     case 0n:
       (t, t2) = ft
       (cs, cs2) = fc
-      two.rejoin(t2, cs2, cols.go(U32.to_nat((U32.shln(1, w) - 1 : U32)), U32.shln(j, w), k, kb, nb, Two{t, cs}))
+      two.rejoin(t2, cs2, cols.go(U32.to_nat((U32.shln(1, w) - 1 : U32)), U32.shln(j, w), k, o, step, nb, Two{t, cs}))
     case 1n+p:
       (t0, t1) = ft
       (c0, c1) = fc
       +i = (j * 2 : U32)
-      l r = cols(p, i, w, k, kb, nb, Array.fork(U32, t0), Array.fork(U32, c0))
-        cols(p, (i + 1 : U32), w, k, kb, nb, Array.fork(U32, t1), Array.fork(U32, c1))
+      l r = cols(p, i, w, k, o, step, nb, Array.fork(U32, t0), Array.fork(U32, c0))
+        cols(p, (i + 1 : U32), w, k, o, step, nb, Array.fork(U32, t1), Array.fork(U32, c1))
       two.join(l, r)
 
 # Driver
@@ -209,12 +290,25 @@ def count.fin(keys: Array<U32>, r: Two) -> Array<U32> & Bufs:
   Two{table, counts} = r
   (keys, Bufs{counts, table})
 
-# Pass 2 over the 2^kb columns, 2^min(d, kb) groups.
-def count.cols(+d: Nat, +k: U32, +kb: Nat, counts: Array<U32>, r: Two) -> Array<U32> & Bufs:
-  Two{keys, table} = r
-  +g = Nat.min(d, kb)
-  count.fin(keys, cols(g, 0, Nat.sub(kb, g), k, kb, U32.to_nat((U32.shln(1, d) - 1 : U32)),
-    Array.fork(U32, table), Array.fork(U32, fit.eq(kb, Array.size(U32, counts)))))
+# Pass 2b over the 2^kb columns, 2^min(d, kb) groups: each sums its
+# columns over the 2^r groups' last rows.
+def count.cols(+r: Nat, +m: Nat, +g: Nat, +k: U32, +kb: Nat, keys: Array<U32>, counts: Array<U32>, table: Array<U32>) -> Array<U32> & Bufs:
+  count.fin(keys, cols(g, 0, Nat.sub(kb, g), k, U32.shln((U32.shln(1, m) - 1 : U32), kb), U32.shln(1, Nat.add(m, kb)),
+    U32.to_nat((U32.shln(1, r) - 1 : U32)), Array.fork(U32, table), Array.fork(U32, fit.eq(kb, Array.size(U32, counts)))))
+
+# Pass 2a over 2^r groups of 2^m rows by 2^min(d, kb) groups of columns,
+# then 2b; below 2^12 rows, 2b alone, over 2^d groups of one row.
+def count.grp(lo: Bool, +d: Nat, +k: U32, +kb: Nat, counts: Array<U32>, p: Two) -> Array<U32> & Bufs:
+  match lo:
+    case True{}:
+      Two{keys, table} = p
+      count.cols(d, 0n, Nat.min(d, kb), k, kb, keys, counts, table)
+    case False{}:
+      Two{keys, table} = p
+      +g = Nat.min(d, kb)
+      +r = Scan.half(d)
+      +m = Nat.sub(d, r)
+      count.cols(r, m, g, k, kb, keys, counts, grp(Nat.add(r, g), False{}, 0, g, Nat.sub(kb, g), m, kb, k, Array.fork(U32, table)))
 
 def count.at(+b: Nat, +k: U32, bufs: Bufs, r: Array<U32> & U32) -> Array<U32> & Bufs:
   Bufs{counts, table} = bufs
@@ -223,7 +317,7 @@ def count.at(+b: Nat, +k: U32, bufs: Bufs, r: Array<U32> & U32) -> Array<U32> & 
   +kb = kbits(kk)
   +lg = U32.log2(n)
   +d = Nat.min(b, lg)
-  count.cols(d, kk, kb, counts, rows(d, 0, Nat.sub(lg, d), kb, kk, Array.fork(U32, keys),
+  count.grp(small(d), d, kk, kb, counts, rows(d, 0, Nat.sub(lg, d), kb, kk, Array.fork(U32, keys),
     Array.fork(U32, fit.ge(Nat.add(d, kb), Array.size(U32, table)))))
 
 # API

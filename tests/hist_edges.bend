@@ -2,8 +2,8 @@
 # all keys equal; K = 1 with raw 32-bit keys (all clamp to bucket 0);
 # K = n (256 buckets, 256 keys) at b 2 and 8; every key the largest U32
 # (all clamp to K - 1); raw keys with K = 1000 (most clamp); K = 0 (one
-# bucket). A line reads the case, diff and hash; the hashes come from
-# tests/lib/expect.py.
+# bucket); b 13 (an odd split of the rows) and b 12 with K = 1. A line
+# reads the case, diff and hash; the hashes come from tests/lib/expect.py.
 import Base
 import ../histogram.bend as Hist
 import ../ref.bend as Ref
@@ -31,7 +31,9 @@ def main() -> IO(Unit):
     Unit <- one_case(6n, 2n, 16, 2, 0, 4294967295)
     Unit <- one_case(10n, 5n, 1000, 0, 6, 0)
     Unit <- one_case(7n, 3n, 0, 1, 7, 9)
-    one_case(14n, 10n, 100, 1, 8, 100)
+    Unit <- one_case(14n, 10n, 100, 1, 8, 100)
+    Unit <- one_case(13n, 13n, 300, 1, 9, 300)
+    one_case(12n, 12n, 1, 0, 10, 0)
 
 #|d=0 b=0 k=5 kind=1 m=5 counts diff=0 hash=2345056881
 #|d=0 b=4 k=1 kind=0 m=0 counts diff=0 hash=1
@@ -43,3 +45,5 @@ def main() -> IO(Unit):
 #|d=10 b=5 k=1000 kind=0 m=0 counts diff=0 hash=3681682432
 #|d=7 b=3 k=0 kind=1 m=9 counts diff=0 hash=128
 #|d=14 b=10 k=100 kind=1 m=100 counts diff=0 hash=822549072
+#|d=13 b=13 k=300 kind=1 m=300 counts diff=0 hash=37087806
+#|d=12 b=12 k=1 kind=0 m=0 counts diff=0 hash=4096
