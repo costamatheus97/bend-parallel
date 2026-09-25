@@ -338,7 +338,8 @@ length, pad it up to the next power of two:
 - The references in `ref.bend` are specs, not fast code. The sort and
   histogram references are O(n * K).
 - Allocation under `!` fills on one lane (see Buffers).
-- The package targets Bend 2.0.27 and also checks and runs on 2.0.24. The
+- The package targets Bend 2.0.27 and also checks and runs on 2.0.24 and
+  2.0.28. The
   code uses no syntax that differs between the two. Things that 2.0.27 has
   and this package avoids:
   - `def f?()` as sugar for `@unsafe`;
@@ -347,6 +348,4 @@ length, pad it up to the next power of two:
 
 ## License
 
-TODO: not chosen yet. There is no LICENSE file. Note that Bend 2.0.27's
-guide says a package published without a LICENSE is treated as MIT-0, so
-choose one before publishing.
+Apache-2.0, the same as Bend. See `LICENSE`.
