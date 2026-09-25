@@ -3,8 +3,10 @@
 # by default) on each lane and compares its output with the #| lines at
 # the end of the file.
 #
-# Lanes (-l, comma-separated; default check,js,c1,c16):
+# Lanes (-l, comma-separated; default check,proof,js,c1,c16):
 #   check    $BEND t.bend --check-only prints no error
+#   proof    $BEND PROOF.bend prints "All terms check." (every law proven)
+#   proof24  the same with $BEND_HIP
 #   js       $BEND builds t.js; bun runs it (sequential)
 #   c1, c16  $BEND builds a native binary; it runs on 1 and 16 threads
 #   check24  $BEND_HIP t.bend --check-only (the second compiler)
@@ -21,7 +23,7 @@
 # (on WSL: HSA_ENABLE_DXG_DETECTION=1 and LD_LIBRARY_PATH to librocdxg).
 set -u
 cd "$(dirname "$0")"
-LANES=check,js,c1,c16
+LANES=check,proof,js,c1,c16
 if [ "${1:-}" = "-l" ]; then
   LANES=$2
   shift 2
@@ -47,6 +49,14 @@ report() { # lane test ok detail
 same() { # want-file got-file
   diff -q "$1" "$2" >/dev/null 2>&1 && echo 1 || echo 0
 }
+for l in proof proof24; do
+  has $l || continue
+  [ $l = proof ] && cc=$BEND || cc=$BEND_HIP
+  out=$($cc PROOF.bend --check-only 2>&1)
+  ok=0
+  [ "$(echo "$out" | head -1)" = "All terms check." ] && ok=1
+  report $l PROOF "$ok" "$(echo "$out" | head -3)"
+done
 for t in "${TESTS[@]}"; do
   name=$(basename "$t" .bend)
   want=$OUT/$name.want
