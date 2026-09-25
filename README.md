@@ -23,7 +23,7 @@ thread count and lane.
 
 ## Import
 
-From BendHub (Bend 2.0.27 or later):
+From BendHub:
 
 ```
 import bend-parallel@0.1.0.0/scan.bend as Scan
@@ -127,9 +127,8 @@ with `Bufs.sized` outside the `!` and hand the same `Bufs` back each call
 ## Example
 
 This program fetches the package from BendHub (2.0.27 or later; with
-`./bend-parallel/...` imports it also checks on 2.0.24). Built with 2.0.27
-or run with 2.0.28, it prints 9 (the total), 2 (the keys in bucket 3) and 1 (the
-smallest key).
+`./bend-parallel/...` imports it also checks on 2.0.24). It prints 9 (the
+total), 2 (the keys in bucket 3) and 1 (the smallest key).
 
 ```
 import Base
@@ -340,9 +339,8 @@ length, pad it up to the next power of two:
   histogram references are O(n * K).
 - Allocation under `!` fills on one lane (see Buffers).
 - The package targets Bend 2.0.27 and also checks and runs on 2.0.24 and
-  2.0.28. The
-  code uses no syntax that differs between the two. Things that 2.0.27 has
-  and this package avoids:
+  2.0.28. The code uses no syntax that differs between them. Things that
+  2.0.27 has and this package avoids:
   - `def f?()` as sugar for `@unsafe`;
   - versioned `name@version/` imports;
   - the stricter rule against dots in module file names.
