@@ -298,8 +298,7 @@ heavy on the CPU, and nothing else on the GPU for the GPU lane.
 
 No numbers are published here yet, because none were taken in a quiet
 window. Expect the parallel versions to lose to `b = 0` on small inputs,
-where fork, join and GPU turn overheads dominate. Unrecorded smoke runs
-on the CPU lanes showed this at 2^10 to 2^14 keys.
+where fork, join and GPU turn overheads dominate (not yet measured).
 
 ## Sizes that are not a power of two
 
